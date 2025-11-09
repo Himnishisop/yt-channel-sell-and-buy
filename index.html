@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Push-up Counter (full debug)</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.20.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+<style>
+  body {
+    margin:0;background:#000;color:#0ff;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    height:100vh;font-family:sans-serif;
+  }
+  video {
+    width:90%;max-width:420px;
+    border:2px solid #0ff;border-radius:10px;
+    transform:scaleX(-1);
+  }
+  #log {
+    color:#aaa;font-size:.9em;
+    height:100px;overflow:auto;
+    width:90%;max-width:420px;
+    background:#111;padding:6px;border-radius:6px;
+  }
+</style>
+</head>
+<body>
+<h1 id="count">Pushups: 0</h1>
+<video id="video" autoplay playsinline></video>
+<div id="log"></div>
+
+<script>
+let detector, video;
+let count = 0;
+let state = "up";
+let diffHistory = [];
+let downThr = 40, upThr = 100;   // starting guesses
+
+function log(m){
+  console.log(m);
+  const box=document.getElementById("log");
+  box.textContent += m + "\n";
+  box.scrollTop = box.scrollHeight;
+}
+
+async function init(){
+  video=document.getElementById("video");
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({video:true});
+    video.srcObject=stream;
+    log("Camera ready");
+    detector = await poseDetection.createDetector(
+      poseDetection.SupportedModels.MoveNet,
+      {modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING}
+    );
+    log("Model ready");
+    loop();
+  }catch(e){
+    log("Init error: "+e);
+  }
+}
+
+async function loop(){
+  try{
+    const poses=await detector.estimatePoses(video);
+    if(poses.length){
+      const k=poses[0].keypoints;
+      const s=k.find(p=>p.name==="left_shoulder");
+      const h=k.find(p=>p.name==="left_hip");
+      if(s && h){
+        const diff = s.y - h.y;
+        diffHistory.push(diff);
+        if(diffHistory.length>10) diffHistory.shift();
+        const avg = diffHistory.reduce((a,b)=>a+b)/diffHistory.length;
+
+        // Auto-adjust thresholds slowly
+        if(avg>upThr) upThr = avg*0.9;
+        if(avg<downThr) downThr = avg*1.1;
+
+        if(state==="up" && avg < downThr){
+          state="down";
+          log(`Going down  diff=${avg.toFixed(1)} ↓`);
+        }else if(state==="down" && avg > upThr){
+          state="up";
+          count++;
+          update();
+          log(`Pushup #${count}  diff=${avg.toFixed(1)} ↑`);
+        }else{
+          log(`diff=${avg.toFixed(1)}  state=${state}`);
+        }
+      } else {
+        log("Missing keypoints");
+      }
+    } else {
+      log("No pose");
+    }
+  }catch(e){
+    log("Loop error: "+e);
+  }
+  requestAnimationFrame(loop);
+}
+
+function update(){
+  document.getElementById("count").textContent="Pushups: "+count;
+  if(window.ReactNativeWebView){
+    window.ReactNativeWebView.postMessage(JSON.stringify({type:"count",count}));
+  }
+}
+
+init();
+</script>
+</body>
+</html>
